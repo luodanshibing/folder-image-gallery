@@ -86,6 +86,72 @@ function findScrollParent(el) {
   return null;
 }
 
+/**
+ * 把用户写的路径收拾成库内标准路径。
+ * 用户经常直接从资源管理器复制 Windows 路径（`E Yearify\E3 项目\...`），
+ * 而 Obsidian 的库内路径一律用正斜杠 —— 不转换的话 getFolderByPath 永远找不到。
+ */
+function normalizeVaultPath(raw) {
+  let p = String(raw == null ? '' : raw).trim();
+  if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
+    p = p.slice(1, -1).trim();
+  }
+  p = p.replace(/\\/g, '/');        // 反斜杠 → 正斜杠
+  p = p.replace(/\/{2,}/g, '/');    // 折叠重复斜杠
+  p = p.replace(/^\.\//, '');       // 去掉开头的 ./
+  p = p.replace(/^\/+|\/+$/g, '');  // 去掉首尾斜杠
+  return p;
+}
+
+/**
+ * 尽力找到文件夹，按容错顺序试：
+ * 标准路径 → 剥掉库根绝对前缀 → 去掉盘符 → 大小写不敏感兜底扫一遍。
+ */
+function resolveFolder(app, raw) {
+  const wanted = normalizeVaultPath(raw);
+  if (!wanted) return null;
+
+  const tryPath = (p) => {
+    if (!p) return null;
+    let found = null;
+    try { found = app.vault.getFolderByPath(p); } catch (e) { found = null; }
+    if (!found && typeof app.vault.getAbstractFileByPath === 'function') {
+      try { found = app.vault.getAbstractFileByPath(p); } catch (e) { found = null; }
+    }
+    return found instanceof TFolder ? found : null;
+  };
+
+  let folder = tryPath(wanted);
+  if (folder) return folder;
+
+  const adapter = app.vault.adapter;
+  const base = adapter && typeof adapter.getBasePath === 'function'
+    ? normalizeVaultPath(adapter.getBasePath())
+    : '';
+  if (base && wanted.toLowerCase().indexOf(`${base.toLowerCase()}/`) === 0) {
+    folder = tryPath(wanted.slice(base.length + 1));
+    if (folder) return folder;
+  }
+
+  // 用户直接把整个 Windows 路径贴进来时：从后往前逐段当库内路径试
+  if (/^[a-zA-Z]:\//.test(wanted)) {
+    const parts = wanted.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      folder = tryPath(parts.slice(i).join('/'));
+      if (folder) return folder;
+    }
+  }
+
+  const lower = wanted.toLowerCase();
+  const all = typeof app.vault.getAllLoadedFiles === 'function' ? app.vault.getAllLoadedFiles() : [];
+  for (const file of all) {
+    if (!(file instanceof TFolder)) continue;
+    const fp = file.path.toLowerCase();
+    if (fp === lower || lower.endsWith('/' + fp)) return file;
+  }
+  return null;
+}
+
 /* ------------------------------------------------------- 代码块参数解析 --- */
 
 function parseGalleryOptions(source) {
@@ -497,19 +563,26 @@ class GalleryRenderer extends MarkdownRenderChild {
       el.createDiv({ cls: 'fg-empty', text: '缺少 folder/path 参数：请指定要展示图片的文件夹。' });
       return;
     }
-    const folder = this.app.vault.getFolderByPath(this.opts.folder);
+    const wantedPath = normalizeVaultPath(this.opts.folder);
+    if (!wantedPath) {
+      el.createDiv({ cls: 'fg-empty', text: 'folder/path 是空的：请填相对库根目录的文件夹名。' });
+      return;
+    }
+    const folder = resolveFolder(this.app, wantedPath);
     if (!folder) {
       el.createDiv({
         cls: 'fg-empty',
-        text: `未找到文件夹：“${this.opts.folder}”。请确认是相对库根目录的路径；值中 # 之后为注释，会被忽略。`,
+        text: `未找到文件夹：“${wantedPath}”。反斜杠 \\ 已自动换算成正斜杠，若仍找不到，请核对它确实是相对库根目录的路径`
+          + `（不要带盘符或库名）；值中 # 之后是注释，会被忽略。`,
       });
       return;
     }
+    this.folderPath = folder.path;
 
     const files = [];
     collectImages(folder, this.opts.recursive, files);
     if (files.length === 0) {
-      el.createDiv({ cls: 'fg-empty', text: `文件夹 ${this.opts.folder} 中没有图片。` });
+      el.createDiv({ cls: 'fg-empty', text: `文件夹 ${folder.path} 中没有图片（支持的格式见插件说明）。` });
       return;
     }
     sortFiles(files, this.opts.sort, this.opts.order);
@@ -871,12 +944,13 @@ class GalleryRenderer extends MarkdownRenderChild {
 
   /** 文件夹路径是否影响本画廊（用于自动刷新）。 */
   affectedBy(path) {
-    const folder = this.opts.folder;
+    const folder = this.folderPath || normalizeVaultPath(this.opts.folder);
     if (!folder) return false;
-    if (path === folder) return true; // 文件夹自身被删/改名
-    if (this.opts.recursive) return path.startsWith(folder + '/');
-    const idx = path.lastIndexOf('/');
-    const parent = idx === -1 ? '' : path.slice(0, idx);
+    const p = normalizeVaultPath(path);
+    if (p === folder) return true; // 文件夹自身被删/改名
+    if (this.opts.recursive) return p.startsWith(folder + '/');
+    const idx = p.lastIndexOf('/');
+    const parent = idx === -1 ? '' : p.slice(0, idx);
     return parent === folder;
   }
 }
@@ -1157,6 +1231,8 @@ module.exports.__internals = {
   visibleIndices,
   nearestIndices,
   normalizeRatio,
+  normalizeVaultPath,
+  resolveFolder,
   collectImages,
   sortFiles,
 };
