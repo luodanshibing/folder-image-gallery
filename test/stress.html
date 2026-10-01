@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Folder Image Gallery · 压测台</title>
+<!-- 插件样式：两种目录结构各列一份，找不到的会静默 404 -->
+<link rel="stylesheet" href="../plugin/styles.css">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 16px 20px 40px;
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #1e1e22; color: #d7d7dc;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #8b8b96; font-size: 12px; margin-bottom: 14px; }
+  .panel {
+    display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end;
+    padding: 12px 14px; background: #26262c; border: 1px solid #34343c; border-radius: 8px;
+  }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #9a9aa4; }
+  input, select {
+    background: #1b1b20; color: #e6e6ec; border: 1px solid #3b3b45;
+    border-radius: 5px; padding: 5px 8px; font: inherit; min-width: 84px;
+  }
+  button { background: #4d6bfe; color: #fff; border: 0; border-radius: 5px; padding: 7px 14px; font: inherit; cursor: pointer; }
+  button.ghost { background: #34343c; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { border-collapse: collapse; font-size: 13px; margin: 0; }
+  td, th { padding: 3px 12px 3px 0; text-align: left; font-weight: 400; }
+  th { color: #8b8b96; font-weight: 500; }
+  td.num { font-variant-numeric: tabular-nums; color: #eaeaf0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 16px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: #232329; border: 1px solid #34343c; border-radius: 8px; padding: 12px 14px; }
+  .card h2 { font-size: 14px; margin: 0 0 8px; color: #c8c8d2; }
+  .good { color: #5bd47a; }
+  .bad { color: #ff7b72; }
+  #log { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: #9a9aa4; white-space: pre-wrap; max-height: 132px; overflow: auto; }
+  #stage { height: 62vh; overflow-y: auto; overscroll-behavior: contain; background: #191919; border: 1px solid #34343c; border-radius: 8px; padding: 10px; margin-top: 16px; }
+  .bar { height: 6px; background: #34343c; border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; width: 0; background: #4d6bfe; transition: width .15s; }
+</style>
+</head>
+<body>
+
+<h1>Folder Image Gallery · 虚拟滚动压测台</h1>
+<div class="sub">
+  跑的就是插件的 <b>main.js 本体</b>（没有重写一份）：合成图 + 假 vault 驱动真实的 <code>GalleryRenderer</code>。
+  合成图循环复用，所以这里主要压「布局 / 虚拟化 / 滚动」；真实照片的解码开销请在 Obsidian 里用实际文件夹验证。
+</div>
+
+<div class="panel">
+  <label>图片数量 <input id="count" type="number" value="5000" min="10" max="200000" step="500"></label>
+  <label>布局
+    <select id="type">
+      <option value="horizontal">horizontal 等高铺满</option>
+      <option value="vertical">vertical 多列瀑布</option>
+    </select>
+  </label>
+  <label>行高 px <input id="height" type="number" value="260" min="60" max="800" step="10"></label>
+  <label>列数(0=自动) <input id="columns" type="number" value="0" min="0" max="12"></label>
+  <label>间距 px <input id="gap" type="number" value="8" min="0" max="40"></label>
+  <button id="run">开始压测</button>
+  <button id="baseline" class="ghost">对比：朴素一次性渲染</button>
+  <button id="clear" class="ghost">清空</button>
+</div>
+<div class="bar"><i id="progress"></i></div>
+
+<div class="grid">
+  <div class="card">
+    <h2>结果</h2>
+    <table id="result"><tbody><tr><td colspan="2" style="color:#8b8b96">点「开始压测」</td></tr></tbody></table>
+  </div>
+  <div class="card">
+    <h2>日志</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<div id="stage"></div>
+
+<script>
+/* ---------- Obsidian 桩件：让 main.js 原样跑在浏览器里 ---------- */
+var obsidianStub = {
+  Plugin: function () {},
+  PluginSettingTab: function () {},
+  Setting: function () {},
+  MarkdownRenderChild: function (el) { this.containerEl = el; },
+  TFile: function () {},
+  TFolder: function () {},
+};
+function require(id) {
+  if (id === 'obsidian') return obsidianStub;
+  throw new Error('未知模块：' + id);
+}
+var module = { exports: {} };
+var exports = module.exports;
+window.__fgBootErrors = [];
+window.addEventListener('error', function (e) {
+  window.__fgBootErrors.push(String((e && e.message) || e));
+});
+</script>
+
+<script>
+/* ---------- Obsidian 给 DOM 加的便利方法，普通浏览器里补上（main.js 会用到） ---------- */
+(function () {
+  function apply(el, o) {
+    if (!o) return el;
+    if (o.cls) el.className = o.cls;
+    if (o.text !== undefined && o.text !== null) el.textContent = o.text;
+    if (o.title !== undefined && o.title !== null) el.title = o.title;
+    if (o.attr) { for (var k in o.attr) el.setAttribute(k, o.attr[k]); }
+    return el;
+  }
+  if (!Element.prototype.empty) {
+    Element.prototype.empty = function () {
+      while (this.firstChild) this.removeChild(this.firstChild);
+      return this;
+    };
+  }
+  if (!Element.prototype.addClass) {
+    Element.prototype.addClass = function () {
+      for (var i = 0; i < arguments.length; i++) if (arguments[i]) this.classList.add(arguments[i]);
+      return this;
+    };
+  }
+  if (!Element.prototype.removeClass) {
+    Element.prototype.removeClass = function () {
+      for (var i = 0; i < arguments.length; i++) this.classList.remove(arguments[i]);
+      return this;
+    };
+  }
+  if (!Element.prototype.createDiv) {
+    Element.prototype.createDiv = function (o) { return this.appendChild(apply(document.createElement('div'), o)); };
+  }
+  if (!Element.prototype.createEl) {
+    Element.prototype.createEl = function (tag, o) { return this.appendChild(apply(document.createElement(tag), o)); };
+  }
+  if (!Element.prototype.createSpan) {
+    Element.prototype.createSpan = function (o) { return this.appendChild(apply(document.createElement('span'), o)); };
+  }
+})();
+</script>
+
+<script>
+(function () {
+  'use strict';
+
+  var logEl = document.getElementById('log');
+  var resultEl = document.getElementById('result');
+  var progressEl = document.getElementById('progress');
+  var stage = document.getElementById('stage');
+
+  function log(msg) {
+    logEl.textContent += msg + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function clearLog() { logEl.textContent = ''; }
+  function setProgress(p) { progressEl.style.width = Math.round(p * 100) + '%'; }
+  function row(k, v, cls) {
+    return '<tr><th>' + k + '</th><td class="num ' + (cls || '') + '">' + v + '</td></tr>';
+  }
+  function fmt(n, d) { return Number(n).toFixed(d === undefined ? 0 : d); }
+
+  /* ---------- 加载真实的 main.js（兼容两种目录结构） ---------- */
+  var CANDIDATES = ['../plugin/main.js', '../main.js', 'main.js'];
+  function loadFirst(list, i, done) {
+    if (i >= list.length) { done(new Error('找不到 main.js，试过：' + list.join(' / '))); return; }
+    var s = document.createElement('script');
+    s.src = list[i];
+    s.onload = function () { done(null, list[i]); };
+    s.onerror = function () { loadFirst(list, i + 1, done); };
+    document.head.appendChild(s);
+  }
+
+  loadFirst(CANDIDATES, 0, function (err, usedPath) {
+    if (err || !module.exports || !module.exports.__internals) {
+      log('加载 main.js 失败：' + (err ? err.message : '未导出 __internals'));
+      return;
+    }
+    log('已加载 main.js（' + usedPath + '）');
+    boot(module.exports.__internals);
+  });
+
+  function boot(api) {
+    var MAX_MOUNTED = api.MAX_MOUNTED;
+
+    /* ---------- 合成图片池：7 种宽高比 ---------- */
+    var RATIOS = [1.5, 1.33, 0.75, 1.0, 1.78, 0.62, 2.4];
+    var BANK_SIZE = 140;
+    var bankPromise = null;
+
+    function ensureBank() {
+      if (bankPromise) return bankPromise;
+      log('生成合成图片池（' + BANK_SIZE + ' 张）…');
+      bankPromise = new Promise(function (resolve) {
+        var urls = [];
+        var i = 0;
+        function next() {
+          if (i >= BANK_SIZE) { log('图片池就绪'); resolve(urls); return; }
+          var ratio = RATIOS[i % RATIOS.length];
+          var h = 720;
+          var w = Math.round(Math.min(2400, Math.max(360, h * ratio)));
+          var canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          var ctx = canvas.getContext('2d');
+          var hue = (i * 37) % 360;
+          var grad = ctx.createLinearGradient(0, 0, w, h);
+          grad.addColorStop(0, 'hsl(' + hue + ',55%,52%)');
+          grad.addColorStop(1, 'hsl(' + ((hue + 60) % 360) + ',60%,28%)');
+          ctx.fillStyle = grad; ctx.fillRect(0, 0, w, h);
+          ctx.fillStyle = 'rgba(255,255,255,.85)';
+          ctx.font = 'bold ' + Math.round(h / 6) + 'px sans-serif';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(String(i + 1), w / 2, h / 2);
+          canvas.toBlob(function (blob) {
+            urls.push(URL.createObjectURL(blob));
+            i++;
+            next();
+          }, 'image/jpeg', 0.62);
+        }
+        next();
+      });
+      return bankPromise;
+    }
+
+    /* ---------- 假 vault ---------- */
+    function buildVault(urls, count) {
+      var root = new obsidianStub.TFolder();
+      root.path = '压测'; root.name = '压测'; root.children = [];
+      var now = Date.now();
+      for (var i = 0; i < count; i++) {
+        var f = new obsidianStub.TFile();
+        f.path = '压测/img-' + ('000000' + i).slice(-6) + '.jpg';
+        f.name = 'img-' + i + '.jpg';
+        f.basename = 'img-' + i;
+        f.extension = 'jpg';
+        f.stat = { mtime: now - i * 1000, ctime: now - i * 1000, size: 100000 + i };
+        f.url = urls[i % urls.length];
+        root.children.push(f);
+      }
+      return root;
+    }
+
+    function makePlugin(root, cache) {
+      return {
+        app: {
+          vault: {
+            getFolderByPath: function (p) { return p === root.path ? root : null; },
+            getResourcePath: function (f) { return f.url; },
+            readBinary: function () { return Promise.reject(new Error('压测台没有二进制回退')); }
+          }
+        },
+        getCachedRatio: function (f) { return cache[f.path] || 0; },
+        setCachedRatio: function (f, r) { cache[f.path] = r; },
+        trackRenderer: function () {},
+        forgetRenderer: function () {}
+      };
+    }
+
+    /* ---------- 计数：渲染器一共创建了多少个 <img> ---------- */
+    var imgCreated = 0;
+    var origCreateElement = document.createElement.bind(document);
+    document.createElement = function (tag) {
+      if (String(tag).toLowerCase() === 'img') imgCreated++;
+      return origCreateElement(tag);
+    };
+
+    /* ---------- 统计 ---------- */
+    function frameStats(frames) {
+      if (!frames.length) return { fps: 0, p95: 0, worst: 0, janky: 0 };
+      var sorted = frames.slice().sort(function (a, b) { return a - b; });
+      var p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
+      var total = frames.reduce(function (s, v) { return s + v; }, 0);
+      return {
+        fps: 1000 / (total / frames.length),
+        p95: p95,
+        worst: sorted[sorted.length - 1],
+        janky: frames.filter(function (v) { return v > 33; }).length
+      };
+    }
+
+    function sweep() {
+      return new Promise(function (resolve) {
+        var maxScroll = Math.max(1, stage.scrollHeight - stage.clientHeight);
+        var distance = Math.min(maxScroll, 45000);
+        var speed = 4200; // px/s
+        var frames = [];
+        var peakCells = 0, peakNodes = 0;
+        var last = performance.now();
+        var start = last;
+        var dir = 1;
+        function sample() {
+          var cells = stage.querySelectorAll('.fg-cell').length;
+          var nodes = stage.querySelectorAll('*').length;
+          if (cells > peakCells) peakCells = cells;
+          if (nodes > peakNodes) peakNodes = nodes;
+        }
+        function step(now) {
+          var dt = now - last;
+          if (dt > 0) frames.push(dt);
+          last = now;
+          stage.scrollTop += dir * speed * dt / 1000;
+          if (stage.scrollTop >= distance) { dir = -1; stage.scrollTop = distance; }
+          else if (stage.scrollTop <= 0) { dir = 1; }
+          sample();
+          if (now - start < Math.min(14000, Math.max(2600, (distance / speed) * 1400))) requestAnimationFrame(step);
+          else resolve({ frames: frames, peakCells: peakCells, peakNodes: peakNodes });
+        }
+        requestAnimationFrame(step);
+      });
+    }
+
+    function jumps(times) {
+      return new Promise(function (resolve) {
+        var maxScroll = Math.max(1, stage.scrollHeight - stage.clientHeight);
+        var frames = [];
+        var peakCells = 0;
+        var last = performance.now();
+        var n = 0;
+        function step(now) {
+          frames.push(now - last); last = now;
+          stage.scrollTop = Math.random() * maxScroll;
+          var cells = stage.querySelectorAll('.fg-cell').length;
+          if (cells > peakCells) peakCells = cells;
+          if (++n < times) requestAnimationFrame(step);
+          else resolve({ frames: frames, peakCells: peakCells });
+        }
+        requestAnimationFrame(step);
+      });
+    }
+
+    function waitFrames(n) {
+      return new Promise(function (resolve) {
+        var done = false;
+        function finish() { if (!done) { done = true; resolve(); } }
+        var i = 0;
+        function tick() { if (++i >= n) finish(); else requestAnimationFrame(tick); }
+        requestAnimationFrame(tick);
+        setTimeout(finish, 150 * n); // 无头/后台标签页 rAF 可能停摆，兜底
+      });
+    }
+
+    /* 确定性校验：滚到若干位置，每个位置都必须真的有图片落在可视区里。
+       直接调用渲染器的 updateWindow()，不依赖 rAF 调度，无头环境也验得了。 */
+    async function scrollCheck() {
+      var renderer = active;
+      var maxScroll = Math.max(0, stage.scrollHeight - stage.clientHeight);
+      var spots = [0, 0.1, 0.3, 0.5, 0.7, 0.9, 1, 0.45, 0];
+      var rows = [];
+      for (var k = 0; k < spots.length; k++) {
+        stage.scrollTop = Math.max(0, Math.min(maxScroll, maxScroll * spots[k]));
+        if (renderer) renderer.updateWindow();
+        await waitFrames(2);
+        var sr = stage.getBoundingClientRect();
+        var cells = stage.querySelectorAll('.fg-cell');
+        var visible = 0;
+        for (var i = 0; i < cells.length; i++) {
+          var r = cells[i].getBoundingClientRect();
+          if (r.bottom > sr.top + 1 && r.top < sr.bottom - 1) visible++;
+        }
+        rows.push({ at: spots[k], mounted: cells.length, visible: visible });
+      }
+      var bad = rows.filter(function (x) { return x.visible === 0; });
+      return { rows: rows, ok: bad.length === 0, bad: bad };
+    }
+
+    function heap() {
+      return performance.memory ? performance.memory.usedJSHeapSize : 0;
+    }
+
+    var active = null;
+
+    /* ---------- 主压测 ---------- */
+    async function run() {
+      var count = Math.max(10, Math.min(200000, parseInt(document.getElementById('count').value, 10) || 5000));
+      var opts = {
+        folder: '压测',
+        type: document.getElementById('type').value,
+        height: parseInt(document.getElementById('height').value, 10) || 260,
+        columns: parseInt(document.getElementById('columns').value, 10) || 0,
+        gap: parseInt(document.getElementById('gap').value, 10) || 8,
+        sort: 'name', order: 'asc', max: 0, recursive: false, title: ''
+      };
+      document.getElementById('run').disabled = true;
+      clearLog();
+      setProgress(0);
+      log('图片数量：' + count + '，布局：' + opts.type + '，行高：' + opts.height);
+      var urls = await ensureBank();
+      if (active) { active.onunload(); active = null; }
+      stage.scrollTop = 0;
+      stage.innerHTML = '';
+      var root = buildVault(urls, count);
+      var cache = {};
+      var plugin = makePlugin(root, cache);
+      var host = origCreateElement('div');
+      stage.appendChild(host);
+
+      imgCreated = 0;
+      var heap0 = heap();
+      var t0 = performance.now();
+      var renderer = new api.GalleryRenderer(plugin, host, opts);
+      renderer.start();
+      var tLayout = performance.now() - t0;
+      active = renderer;
+      log('首帧布局 + 首次挂载：' + fmt(tLayout, 1) + ' ms');
+
+      await new Promise(function (r) { setTimeout(r, 350); });
+      var cellsAfterFirst = stage.querySelectorAll('.fg-cell').length;
+      var nodesAfterFirst = stage.querySelectorAll('*').length;
+      log('首屏挂载单元格：' + cellsAfterFirst + '，DOM 节点：' + nodesAfterFirst);
+
+      var longTasks = [];
+      var po = null;
+      try {
+        po = new PerformanceObserver(function (list) { longTasks.push.apply(longTasks, list.getEntries()); });
+        po.observe({ entryTypes: ['longtask'] });
+      } catch (e) { /* 该浏览器不支持 */ }
+
+      log('校验滚动到各个位置时可视区是否真有图片…');
+      var sc = await scrollCheck();
+      log('  ' + sc.rows.map(function (x) { return Math.round(x.at * 100) + '%:' + x.visible + '/' + x.mounted; }).join('  '));
+      if (!sc.ok) log('  ⚠ 有位置一张都没挂上：' + JSON.stringify(sc.bad));
+
+      log('开始平滑长扫…');
+      var s1 = await sweep();
+      setProgress(0.5);
+      log('开始随机跳跃（200 次）…');
+      var s2 = await jumps(200);
+      setProgress(1);
+      if (po) po.disconnect();
+
+      var f1 = frameStats(s1.frames);
+      var f2 = frameStats(s2.frames);
+      var heap1 = heap();
+      var peakCells = Math.max(s1.peakCells, s2.peakCells);
+      var peakNodes = Math.max(s1.peakNodes, s2.peakNodes);
+      var capOk = peakCells <= MAX_MOUNTED;
+
+      resultEl.innerHTML = '<tbody>'
+        + row('图片总数', count)
+        + row('首帧布局 + 挂载', fmt(tLayout, 1) + ' ms', tLayout < 400 ? 'good' : 'bad')
+        + row('峰值挂载单元格', peakCells + ' / 上限 ' + MAX_MOUNTED, capOk ? 'good' : 'bad')
+        + row('滚动位置校验', sc.ok ? '9 个位置都有图' : '失败 ' + sc.bad.length + ' 处', sc.ok ? 'good' : 'bad')
+        + row('峰值 DOM 节点', peakNodes)
+        + row('本次共创建图片元素', imgCreated)
+        + row('长扫平均帧率', fmt(f1.fps, 1) + ' fps', f1.fps >= 45 ? 'good' : 'bad')
+        + row('长扫 p95 帧耗时', fmt(f1.p95, 1) + ' ms')
+        + row('随机跳跃平均帧率', fmt(f2.fps, 1) + ' fps', f2.fps >= 45 ? 'good' : 'bad')
+        + row('随机跳跃最差帧', fmt(f2.worst, 1) + ' ms')
+        + row('&gt;33ms 的掉帧数', f1.janky + ' + ' + f2.janky)
+        + row('长任务（&gt;50ms）', longTasks.length, longTasks.length === 0 ? 'good' : '')
+        + (heap0 ? row('JS 堆 增减', fmt((heap1 - heap0) / 1048576, 1) + ' MB') : '')
+        + row('已缓存宽高比', Object.keys(cache).length)
+        + '</tbody>';
+      document.getElementById('run').disabled = false;
+      log('完成。' + (capOk && f1.fps >= 45 && f2.fps >= 45 ? '虚拟化上限与帧率都达标。' : '注意看红色项。'));
+      window.__fgDone = true;
+    }
+
+    /* ---------- 对比：朴素一次性渲染 ---------- */
+    async function baseline() {
+      var count = Math.max(10, Math.min(3000, parseInt(document.getElementById('count').value, 10) || 5000));
+      document.getElementById('baseline').disabled = true;
+      clearLog();
+      log('朴素基线：一次性把 ' + count + ' 张全挂进 DOM（上限 3000，避免卡死浏览器）');
+      var urls = await ensureBank();
+      if (active) { active.onunload(); active = null; }
+      stage.innerHTML = '';
+      stage.scrollTop = 0;
+      await new Promise(function (r) { setTimeout(r, 50); });
+      imgCreated = 0;
+      var t0 = performance.now();
+      var frag = document.createDocumentFragment();
+      for (var i = 0; i < count; i++) {
+        var cell = origCreateElement('div');
+        cell.className = 'fg-cell fg-h';
+        cell.style.position = 'relative';
+        cell.style.display = 'inline-block';
+        cell.style.width = '120px'; cell.style.height = '160px'; cell.style.margin = '2px';
+        var img = origCreateElement('img');
+        img.src = urls[i % urls.length];
+        cell.appendChild(img);
+        frag.appendChild(cell);
+      }
+      stage.appendChild(frag);
+      var buildMs = performance.now() - t0;
+      await new Promise(function (r) { setTimeout(r, 600); });
+      var longTasks = [];
+      var po = null;
+      try {
+        po = new PerformanceObserver(function (l) { longTasks.push.apply(longTasks, l.getEntries()); });
+        po.observe({ entryTypes: ['longtask'] });
+      } catch (e) {}
+      var frames = [];
+      var last = performance.now();
+      await new Promise(function (resolve) {
+        var n = 0;
+        function step(now) {
+          frames.push(now - last); last = now;
+          stage.scrollTop = (stage.scrollHeight - stage.clientHeight) * (n % 2 ? 1 : 0.98);
+          if (++n < 40) requestAnimationFrame(step); else resolve();
+        }
+        requestAnimationFrame(step);
+      });
+      if (po) po.disconnect();
+      var f = frameStats(frames);
+      var nodes = stage.querySelectorAll('*').length;
+      resultEl.innerHTML = '<tbody>'
+        + row('图片总数', count + '（基线）')
+        + row('建 DOM 耗时', fmt(buildMs, 1) + ' ms', 'bad')
+        + row('DOM 节点数', nodes, 'bad')
+        + row('滚动平均帧率', fmt(f.fps, 1) + ' fps', f.fps >= 45 ? '' : 'bad')
+        + row('滚动最差帧', fmt(f.worst, 1) + ' ms', 'bad')
+        + row('长任务（&gt;50ms）', longTasks.length, longTasks.length ? 'bad' : '')
+        + '</tbody>';
+      log('基线完成：节点数 ' + nodes + '，注意它随图片数量线性增长。');
+      document.getElementById('baseline').disabled = false;
+      window.__fgDone = true;
+    }
+
+    document.getElementById('run').addEventListener('click', function () {
+      run().catch(function (e) { log('出错：' + e.message); console.error(e); });
+    });
+    document.getElementById('baseline').addEventListener('click', function () {
+      baseline().catch(function (e) { log('出错：' + e.message); console.error(e); });
+    });
+    document.getElementById('clear').addEventListener('click', function () {
+      if (active) { active.onunload(); active = null; }
+      stage.innerHTML = '';
+      clearLog();
+      resultEl.innerHTML = '<tbody><tr><td colspan="2" style="color:#8b8b96">已清空</td></tr></tbody>';
+      setProgress(0);
+    });
+
+    log('准备就绪：点「开始压测」会用真实插件代码渲染，自动长扫 + 随机跳跃并统计帧率。');
+
+    // 无人值守模式：stress.html?auto=1&n=20000
+    var qs = new URLSearchParams(location.search);
+    if (qs.has('auto')) {
+      if (qs.has('n')) document.getElementById('count').value = qs.get('n');
+      if (qs.has('type')) document.getElementById('type').value = qs.get('type');
+      setTimeout(function () { run().catch(function (e) { log('出错：' + e.message); }); }, 200);
+    }
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+/* ============================================================================
+ * Folder Image Gallery v2.0.0 样式
+ * ----------------------------------------------------------------------------
+ * 虚拟滚动布局：.fg-viewport 是一块"总高度 = 整页内容高度"的定位容器，
+ * 真正挂进 DOM 的只有视口附近的 .fg-cell，用 transform 定位。
+ * ========================================================================== */
+
+/* 外层容器 */
+.fg-gallery {
+  margin: 0.5em 0;
+}
+
+.fg-title {
+  font-weight: 600;
+  font-size: 1.1em;
+  margin-bottom: 0.35em;
+  color: var(--text-normal);
+}
+
+/* 定位容器：高度由 JS 按布局结果设置；contain 把重排影响限制在内部 */
+.fg-viewport {
+  position: relative;
+  width: 100%;
+  contain: layout style;
+}
+
+/* 单元格：绝对定位 + transform 摆放，不改尺寸就不触发重排 */
+.fg-cell {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  border-radius: var(--radius-s, 6px);
+  background: var(--background-modifier-border);
+  contain: content;
+}
+
+.fg-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.fg-img.fg-loaded {
+  opacity: 1;
+}
+
+.fg-cell.fg-error {
+  background: var(--background-modifier-error, var(--background-modifier-border));
+}
+
+.fg-cell.fg-error .fg-img {
+  opacity: 0.2;
+  filter: grayscale(1);
+}
+
+.fg-empty {
+  color: var(--text-faint);
+  font-size: 0.9em;
+  padding: 0.6em 0;
+}
+
+/* 兼容 v1 的类名（老用户的自定义 CSS 片段不至于失效） */
+.fg-grid-h,
+.fg-grid-v {
+  display: block;
+}
+
+.fg-h,
+.fg-v {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+}
+
+/* 打印时不做虚拟化裁剪：把容器撑开，浏览器自己分页 */
+@media print {
+  .fg-viewport {
+    height: auto !important;
+  }
+  .fg-cell {
+    position: static !important;
+    transform: none !important;
+    display: inline-block;
+    margin: 0 4px 4px 0;
+  }
+}
