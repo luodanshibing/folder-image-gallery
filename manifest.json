@@ -1,7 +1,7 @@
 {
   "id": "folder-image-gallery",
   "name": "Folder Image Gallery",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "minAppVersion": "1.4.0",
   "description": "用 ```gallery 代码块把指定文件夹的图片聚合成高性能瀑布流画廊：虚拟滚动 + 尺寸缓存 + 按需加载，图片上千上万也不卡。",
   "author": "luodanshibing",

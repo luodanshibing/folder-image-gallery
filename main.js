@@ -205,6 +205,12 @@ function parseGalleryOptions(source) {
         if (n >= 0) opts.max = n;
         break;
       }
+      case 'radius':
+      case 'border-radius': {
+        const n = toInt(value);
+        if (n >= 0) opts.radius = Math.min(n, 64); // 兼容旧插件（lucaorio）的 radius 参数
+        break;
+      }
       case 'recursive':
         opts.recursive = value === 'true' || value === '1' || value === 'yes';
         break;
@@ -751,6 +757,7 @@ class GalleryRenderer extends MarkdownRenderChild {
     const cell = document.createElement('div');
     cell.className = `fg-cell ${this.opts.type === 'vertical' ? 'fg-v' : 'fg-h'}`;
     cell.title = file.basename || file.name || '';
+    if (this.opts.radius > 0) cell.style.borderRadius = `${Math.round(this.opts.radius)}px`; // 兼容旧插件的 radius
     this.applyGeometry(cell, this.layout.rects[index]);
 
     const img = document.createElement('img');
@@ -1141,6 +1148,7 @@ class FolderGalleryPlugin extends Plugin {
       sort: parsed.sort != null ? parsed.sort : s.defaultSort,
       order: parsed.order != null ? parsed.order : s.defaultOrder,
       max: parsed.max != null ? parsed.max : 0,
+      radius: parsed.radius != null ? parsed.radius : 0, // 0 = 用样式表里的默认圆角
       recursive: parsed.recursive != null ? parsed.recursive : s.defaultRecursive,
       title: parsed.title != null ? parsed.title : '',
     };

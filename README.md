@@ -43,6 +43,7 @@ type: horizontal       # horizontal（默认，等高铺满）| vertical（多�
 height: 260            # 行高 px，horizontal 用
 columns: 4             # 列数，vertical 用；0 = 按容器宽度自适应
 gap: 8                 # 间距 px（也可写 gutter:）
+radius: 8              # 圆角 px（也可写 border-radius:）；不写 = 用主题默认圆角
 sort: mtime            # name | mtime | ctime（也可写 sortby:）
 order: desc            # asc | desc
 max: 0                 # 最多展示张数；0 = 全部
@@ -62,7 +63,8 @@ folder: 附件
 - 值里 `#` 之后是注释，会被忽略；值可以用引号包起来（含空格时建议加）。
 - **路径分隔符用正斜杠 `/`**（例 `E Yearify/E3 项目/xxx`）。直接从资源管理器复制的 Windows 反斜杠路径（`E Yearify\E3 项目\xxx`）会自动换算，整条绝对路径（`E:\Dnotes\...`）也会尽量剥掉库根前缀再找。
 - `type` 也接受 `justified`（= horizontal）和 `masonry`（= vertical）。
-- 兼容 lucaorio 的写法：`path:`、`gutter:`、`sortby:`、`sort: desc`（会被识别为排序方向）。
+- 兼容 lucaorio 的写法：`path:`、`gutter:`、`sortby:`、`sort: asc|desc`、`radius:` 都认。
+  **从社区插件 `obsidian-image-gallery` 迁过来**：把代码块语言从 ` ```img-gallery ` 改成 ` ```gallery ` 即可，参数不用动。
 - 画廊文档本身仍可被别的笔记用 `![[文件名]]` 嵌入，嵌入后照样渲染。
 
 ---
