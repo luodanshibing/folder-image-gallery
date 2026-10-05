@@ -1,4 +1,137 @@
-# Folder Image Gallery · Obsidian 文件夹图片瀑布流画廊
+# Folder Image Gallery
+
+[English](#english) · [简体中文](#简体中文)
+
+---
+
+## English
+
+Render an entire folder of images as a **masonry gallery** inside any note, with a single ```` ```gallery ```` code block.
+
+One goal only: **stay smooth no matter how many images** — thousands, tens of thousands.
+
+> What changed in 2.0: instead of putting every image into the DOM at once, it now uses **virtual scrolling**.
+> Only a few dozen cells near the viewport are ever mounted; the rest live neither in the DOM nor in memory.
+> The look of [lucaorio/obsidian-image-gallery](https://github.com/lucaorio/obsidian-image-gallery) is preserved,
+> but the "60 4K images and it stutters" path is gone.
+
+### Why it is fast
+
+| Technique | How | Effect |
+|---|---|---|
+| Virtual scrolling | Layout is computed up front (x, y, w, h per image); only cells within ~900px above/below the viewport are mounted, and unmounted (with decoded image memory released) as they scroll away | DOM node count is **decoupled** from image count: 20,000 images ≈ 15–30 cells |
+| Self-computed layout | Justified rows / columns are plain arithmetic, computed in one pass — the browser never has to decode images one by one and guess | 50,000-image layout in < 10 ms, zero reflow while scrolling |
+| Size cache | Aspect ratios cached in the plugin's `data.json`, keyed by `path@mtime@size` | Reopening the same folder lays out precisely, no re-probing |
+| Neighbourhood probing | Only probes sizes in a window around the viewport (concurrency 5, scroll has priority) | First screen appears immediately; no pre-reading of the whole folder |
+| Lazy `src` | `src` is set only when a cell nears the viewport; failures fall back to binary read + Blob | Never reads thousands of originals at once |
+| Scroll anchoring | When a size correction changes layout, scroll compensation pins the picture you are looking at | No "jump" while scrolling |
+
+### Install (manual)
+
+1. Copy `main.js`, `manifest.json`, `styles.css` into `<vault>/.obsidian/plugins/folder-image-gallery/`.
+2. Restart Obsidian (or `Ctrl/Cmd+P` → "Reload app without saving").
+3. Settings → Community plugins → enable **Folder Image Gallery**.
+
+> Coming from the older `folder-gallery`? Delete that old folder first (the plugin id changed).
+> This plugin does not conflict with lucaorio's `obsidian-image-gallery`; you can install both and compare.
+
+### Usage (a hand-written code block)
+
+````markdown
+```gallery
+folder: attachments/photos   # required, path relative to the vault root (alias: path:)
+type: horizontal             # horizontal (default, equal-height rows) | vertical (columns, natural ratio)
+height: 260                  # row height in px, used by horizontal
+columns: 4                   # column count, used by vertical; 0 = fit container width
+gap: 8                       # spacing in px (alias: gutter:)
+radius: 8                    # corner radius in px (alias: border-radius:); omit = theme default
+sort: mtime                  # name | mtime | ctime (alias: sortby:)
+order: desc                  # asc | desc
+max: 0                       # max images; 0 = all
+recursive: true              # include subfolders
+title: My photos             # optional caption
+```
+````
+
+Minimal form:
+
+````markdown
+```gallery
+folder: attachments
+```
+````
+
+- In a value, everything after `#` is a comment. Values may be quoted (recommended when they contain spaces).
+- **Use forward slashes `/` as separators.** Windows backslash paths pasted from Explorer are converted automatically, and full absolute paths (`E:\Dnotes\...`) have the vault-root prefix stripped before lookup.
+- `type` also accepts `justified` (= horizontal) and `masonry` (= vertical).
+- lucaorio-compatible spellings are accepted: `path:`, `gutter:`, `sortby:`, `sort: asc|desc`, `radius:`.
+  **Migrating from `obsidian-image-gallery`**: change the code-block language from ` ```img-gallery ` to ` ```gallery ` — no other edit needed.
+- A gallery note can still be embedded into other notes with `![[note]]`; it renders there too.
+
+### Settings
+
+Settings → Community plugins → Folder Image Gallery: default layout / row height / columns / gap / sort / recursion, plus **clear the image size cache**.  
+Values written in a code block override the settings defaults.
+
+### Performance (measured on the bundled bench)
+
+Open `test/stress.html` in a browser — the bench runs `main.js` itself:
+
+| Images | Layout | Peak mounted cells | Peak DOM nodes | Scroll-position check |
+|---|---|---|---|---|
+| 5,000 | horizontal | 15 | 32 | images visible at 9/9 positions |
+| 20,000 | horizontal | 15 | 32 | — |
+| 8,000 | vertical | 36 | 74 | — |
+| 3,000 | horizontal | 28 | — | 9/9 passed (including bottom) |
+
+For comparison: mounting every image at once (the old approach) reaches ~6,000 nodes at 3,000 images, growing linearly.
+
+> The bench reuses synthetic images, so it stresses **layout / virtualisation / scrolling**. For real-photo decoding cost, judge by feel with your own folder inside Obsidian.
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `main.js` | The plugin itself (**single file, zero build** — edit and it takes effect, no npm/bundler) |
+| `styles.css` | Styles (`.fg-viewport` is the positioning container, `.fg-cell` is absolutely positioned) |
+| `manifest.json` | Plugin manifest |
+| `test/stress.html` | Bench: synthetic images, automated long scans and random jumps; reports FPS, DOM ceiling, long tasks |
+| `test/preview.html` | Static preview: compare horizontal vs vertical layout side by side |
+
+`test/` is development-only; it does not affect plugin loading and can be omitted when installing.
+
+### FAQ
+
+**Nothing shows up?** Three cases:
+1. **The code block is not even rendered** (still a grey code block) → the plugin is not enabled: Settings → Community plugins → turn on **Folder Image Gallery**, or restart Obsidian.
+2. **"Folder not found: …"** → the path is wrong. It is **relative to the vault root** — no drive letter, no vault name. Prefer `/` as separator (backslashes are converted). To be sure, right-click the folder in the file explorer → "Copy path".
+3. **"No images in folder …"** → the path is right, but the folder has no image the plugin recognises. Supported: `jpg jpeg png gif webp bmp svg avif tiff tif ico`. `.heic`, `.psd`, `.dwg`, `.drawio` and similar are not (Obsidian itself cannot display them).
+
+**Images "grow in" on first scroll through a new area?** Expected. Aspect ratios there have not been probed yet, so an average ratio is used as a placeholder and corrected once probing returns. Corrections only happen below the viewport and never move what you are looking at.
+
+**Where is the cache, and does it keep growing?** In the plugin's own `data.json` (`ratioCache`), keyed with file mtime and size, so a changed image invalidates itself. Cap: 20,000 entries, oldest evicted first. Clear it with one click in settings.
+
+**Does it work on mobile?** Yes — it uses Obsidian's `getResourcePath` and no Node/desktop-only APIs.
+
+**Do I need to reopen the note after adding images?** No. Vault create/rename/delete events refresh visible galleries after a 500 ms debounce.
+
+### Development
+
+`main.js` is the source — edit and reload, no build step. To verify:
+
+```bash
+node tools/layout-test.mjs     # layout unit tests + 50,000-image timing (needs Node)
+```
+
+(`tools/` lives in the project repository, not in the plugin's runtime folder.)
+
+### License
+
+[MIT](LICENSE) © 2026 luodanshibing
+
+---
+
+## 简体中文
 
 在任意笔记中写一个 ```` ```gallery ```` 代码块，把指定文件夹的图片聚合成**瀑布流画廊**。
 目标只有一个：**图片再多也不卡**——几千上万张也保持顺滑。
@@ -7,9 +140,7 @@
 > 其余图片既不在 DOM 里、也不在内存里。参考项目 [lucaorio/obsidian-image-gallery](https://github.com/lucaorio/obsidian-image-gallery)
 > 的观感被完整保留，但那条「60 张 4K 就卡」的路被换掉了。
 
----
-
-## 为什么快
+### 为什么快
 
 | 手段 | 做法 | 效果 |
 |---|---|---|
@@ -20,9 +151,7 @@
 | 按需赋 src | 图片进入视口附近才设置 `src`；失败自动回退二进制读取 + Blob | 不再一次性读几千个原图 |
 | 滚动锚定 | 尺寸修正导致布局变化时，用滚动补偿把正在看的画面钉住 | 不会「滚着滚着跳一下」 |
 
----
-
-## 安装
+### 安装
 
 1. 把 `main.js`、`manifest.json`、`styles.css` 拷进库的
    `<库根目录>/.obsidian/plugins/folder-image-gallery/`。
@@ -32,9 +161,7 @@
 > 旧版 `folder-gallery` 请先在 plugins 目录删掉旧文件夹（插件 id 变过）。
 > 本插件与 lucaorio 的 `obsidian-image-gallery` 互不冲突，可同时安装对比。
 
----
-
-## 用法（只用手写代码块）
+### 用法（只用手写代码块）
 
 ````markdown
 ```gallery
@@ -67,18 +194,14 @@ folder: 附件
   **从社区插件 `obsidian-image-gallery` 迁过来**：把代码块语言从 ` ```img-gallery ` 改成 ` ```gallery ` 即可，参数不用动。
 - 画廊文档本身仍可被别的笔记用 `![[文件名]]` 嵌入，嵌入后照样渲染。
 
----
-
-## 设置
+### 设置
 
 设置 → 第三方插件 → Folder Image Gallery：
 
 默认布局 / 默认行高 / 默认列数 / 默认间距 / 默认排序 / 默认递归，以及**清空图片尺寸缓存**。
 代码块里写了的参数优先于设置里的默认值。
 
----
-
-## 性能实测（本机压测台）
+### 性能实测（本机压测台）
 
 用仓库自带的 `test/stress.html`（浏览器直接打开，画面里跑的就是 `main.js` 本体）：
 
@@ -93,9 +216,7 @@ folder: 附件
 
 > 压测台的图片是合成图循环复用，主要压「布局 / 虚拟化 / 滚动」；真实照片的解码开销请用实际文件夹在 Obsidian 里体感。
 
----
-
-## 文件说明
+### 文件说明
 
 | 文件 | 说明 |
 |---|---|
@@ -107,9 +228,7 @@ folder: 附件
 
 `test/` 只是开发辅助，不影响插件加载，装进库时可以不带。
 
----
-
-## 常见问题
+### 常见问题
 
 **写了 gallery 却什么都不显示？**
 分三种情况看：
@@ -129,9 +248,7 @@ folder: 附件
 **新增图片要重新打开笔记吗？**
 不用。库内文件增删改名会防抖 500ms 后自动刷新正在显示的画廊。
 
----
-
-## 开发
+### 开发
 
 `main.js` 就是源码，直接改、直接生效，无需构建。想验证：
 
@@ -140,3 +257,7 @@ node tools/layout-test.mjs     # 布局算法单测 + 5 万张性能计时（需
 ```
 
 （`tools/` 在项目仓库里，不在插件运行目录。）
+
+### 许可证
+
+[MIT](LICENSE) © 2026 luodanshibing
