@@ -1014,10 +1014,10 @@ class FolderGallerySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('默认布局')
-      .setDesc('horizontal：等高弹性铺满整行的对齐式瀑布流（虚拟滚动）；vertical：多列保持原比例。')
+      .setDesc('horizontal 等高铺满；vertical 多列原比例')
       .addDropdown((d) => d
-        .addOption('horizontal', 'horizontal（等高铺满）')
-        .addOption('vertical', 'vertical（多列原比例）')
+        .addOption('horizontal', 'horizontal 等高铺满')
+        .addOption('vertical', 'vertical 多列原比例')
         .setValue(this.plugin.settings.defaultType)
         .onChange(async (v) => {
           this.plugin.settings.defaultType = v;
@@ -1025,7 +1025,7 @@ class FolderGallerySettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName('默认行高 px（horizontal）')
+      .setName('默认行高')
       .addSlider((s) => s
         .setLimits(100, 600, 10)
         .setValue(this.plugin.settings.defaultHeight)
@@ -1036,7 +1036,7 @@ class FolderGallerySettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName('默认列数（vertical）')
+      .setName('默认列数')
       .setDesc('0 表示按容器宽度自适应。')
       .addText((t) => t
         .setValue(String(this.plugin.settings.defaultColumns))
@@ -1047,7 +1047,7 @@ class FolderGallerySettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName('默认单元格间距（px）')
+      .setName('单元格间距')
       .addSlider((s) => s
         .setLimits(0, 24, 1)
         .setValue(this.plugin.settings.defaultGap)
@@ -1079,7 +1079,7 @@ class FolderGallerySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('默认包含子文件夹')
-      .setDesc('画廊代码块未指定 recursive 时，是否递归收集子文件夹中的图片。')
+      .setDesc('代码块未指定 recursive 时，是否收集子文件夹图片')
       .addToggle((t) => t
         .setValue(this.plugin.settings.defaultRecursive)
         .onChange(async (v) => {
